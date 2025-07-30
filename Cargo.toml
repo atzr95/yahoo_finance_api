@@ -16,24 +16,39 @@ categories = ["api-bindings"]
 include = ["src/**/*", "LICENSE-*", "README.md"]
 
 [dependencies]
+rust_decimal = { version = "1.36", optional = true }
+serde_json = "1.0.140"
+serde_json_path_to_error = { version = "0.1.4", optional = true }
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "1.0"
+time = { version = "0.3.41", features = ["macros", "parsing", "formatting"] }
+
+# Native (non-WASM) reqwest with full features
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12.19", default-features = false, features = [
     "json",
     "rustls-tls",
     "cookies",
 ] }
 
-rust_decimal = { version = "1.36", optional = true }
-serde_json = "1.0.140"
-serde_json_path_to_error = { version = "0.1.4", optional = true }
-serde = { version = "1.0.219", features = ["derive"] }
-thiserror = "1.0"
-time = { version = "0.3.41", features = ["macros"] }
+# WASM reqwest with minimal features (uses browser fetch)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12.19", default-features = false, features = [
+    "json",
+] }
 
 [dev-dependencies]
 tokio-test = "0.4.4"
 tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread"] }
 
+# WASM-specific dev dependencies
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
 [features]
+default = []
+# Blocking API support (not available on WASM)
 blocking = ["reqwest/blocking"]
 decimal = ["dep:rust_decimal"]
 debug = ["serde_json_path_to_error"]

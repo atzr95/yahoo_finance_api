@@ -1826,6 +1826,8 @@ dependencies = [
  "time",
  "tokio",
  "tokio-test",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

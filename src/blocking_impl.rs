@@ -93,24 +93,27 @@ impl YahooConnector {
         YResponse::from_json(self.send_request(&url)?)?.map_error_msg()
     }
 
-    /// Retrieve the list of quotes found searching a given name
-    pub fn search_ticker_opt(&self, name: &str) -> Result<YSearchResultOpt, YahooError> {
-        let url = format!(YTICKER_QUERY!(), url = self.search_url, name = name);
+    /// Search for a ticker given a search string (e.g. company name):
+    pub fn search_ticker(&self, query: &str) -> Result<YSearchResult, YahooError> {
+        let url: String = format!(YTICKER_QUERY!(), url = self.search_url, name = query);
+        let resp = YSearchResultOpt::from_json(self.send_request(&url)?)?;
+        Ok(YSearchResult::from_opt(&resp))
+    }
+
+    /// Search for a ticker given a search string (e.g. company name):
+    pub fn search_ticker_opt(&self, query: &str) -> Result<YSearchResultOpt, YahooError> {
+        let url: String = format!(YTICKER_QUERY!(), url = self.search_url, name = query);
         YSearchResultOpt::from_json(self.send_request(&url)?)
     }
 
-    /// Retrieve the list of quotes found searching a given name
-    pub fn search_ticker(&self, name: &str) -> Result<YSearchResult, YahooError> {
-        let result = self.search_ticker_opt(name)?;
-        Ok(YSearchResult::from_opt(&result))
-    }
-
-    // Get symbol metadata
-    pub fn get_ticker_info(&mut self, symbol: &str) -> Result<YQuoteSummary, YahooError> {
+    /// Get quote summery information for the given ticker. Quote summary includes comprehensive
+    /// information about the ticker (e.g. name, description, headquarters, market cap, statistics,
+    /// etc.)
+    pub fn quote_summary(&mut self, symbol: &str) -> Result<YQuoteSummary, YahooError> {
         if self.crumb.is_none() {
             self.crumb = Some(self.get_crumb()?);
         }
-        let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
+        
         let url = reqwest::Url::parse(
             &(format!(
                 YQUOTE_SUMMARY_QUERY!(),
@@ -119,12 +122,20 @@ impl YahooConnector {
             )),
         );
 
-        cookie_provider.add_cookie_str(&self.cookie.clone().unwrap(), &url.clone().unwrap());
+        #[cfg(not(target_arch = "wasm32"))]
+        let cookie_provider = {
+            let provider = Arc::new(reqwest::cookie::Jar::default());
+            provider.add_cookie_str(&self.cookie.clone().unwrap(), &url.clone().unwrap());
+            Some(provider)
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let cookie_provider = None;
 
         let max_retries = 1;
         for i in 0..=max_retries {
             let text = self
-                .create_client(Some(cookie_provider.clone()))?
+                .create_client(cookie_provider.clone())?
                 .get(url.clone().unwrap())
                 .send()?
                 .text()?;
@@ -210,16 +221,22 @@ impl YahooConnector {
         });
 
         // Setup cookie for authenticated request
-        let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
-        let parsed_url = reqwest::Url::parse(&url).map_err(|_| YahooError::InvalidUrl)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let cookie_provider = {
+            let parsed_url = reqwest::Url::parse(&url).map_err(|_| YahooError::InvalidUrl)?;
+            let provider = Arc::new(reqwest::cookie::Jar::default());
+            if let Some(cookie) = &self.cookie {
+                provider.add_cookie_str(cookie, &parsed_url);
+            }
+            Some(provider)
+        };
 
-        if let Some(cookie) = &self.cookie {
-            cookie_provider.add_cookie_str(cookie, &parsed_url);
-        }
+        #[cfg(target_arch = "wasm32")]
+        let cookie_provider = None;
 
         let max_retries = 1;
         for attempt in 0..=max_retries {
-            let client = self.create_client(Some(cookie_provider.clone()))?;
+            let client = self.create_client(cookie_provider.clone())?;
 
             let response = client
                 .post(&url)
@@ -426,11 +443,18 @@ impl YahooConnector {
         let mut last_error = YahooError::NoResponse;
 
         for _attempt in 0..=MAX_RETRIES {
-            let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
-            cookie_provider.add_cookie_str(&self.cookie.clone().unwrap(), &crumb_url);
+            #[cfg(not(target_arch = "wasm32"))]
+            let cookie_provider = {
+                let provider = Arc::new(reqwest::cookie::Jar::default());
+                provider.add_cookie_str(&self.cookie.clone().unwrap(), &crumb_url);
+                Some(provider)
+            };
+
+            #[cfg(target_arch = "wasm32")]
+            let cookie_provider = None;
 
             let response = self
-                .create_client(Some(cookie_provider.clone()))?
+                .create_client(cookie_provider.clone())?
                 .get(crumb_url.clone())
                 .send()?;
 
@@ -481,19 +505,31 @@ impl YahooConnector {
 
     fn create_client(
         &mut self,
+        #[cfg(not(target_arch = "wasm32"))]
         cookie_provider: Option<Arc<reqwest::cookie::Jar>>,
+        #[cfg(target_arch = "wasm32")]
+        _cookie_provider: Option<()>,
     ) -> Result<Client, reqwest::Error> {
         let mut client_builder = Client::builder();
 
+        // Cookies are only available on non-WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(cookie_provider) = cookie_provider {
             client_builder = client_builder.cookie_provider(cookie_provider);
         }
+        
+        // Timeout is not available on WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(timeout) = &self.timeout {
             client_builder = client_builder.timeout(*timeout);
         }
+        
         if let Some(user_agent) = &self.user_agent {
             client_builder = client_builder.user_agent(user_agent.clone());
         }
+        
+        // Proxy is not available on WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(proxy) = &self.proxy {
             client_builder = client_builder.proxy(proxy.clone());
         }
@@ -756,7 +792,7 @@ mod tests {
     fn test_get_ticker_info() {
         let mut provider = YahooConnector::new().unwrap();
 
-        let result = provider.get_ticker_info("AAPL");
+        let result = provider.quote_summary("AAPL");
 
         let quote_summary = result.unwrap().quote_summary.unwrap();
         assert!(

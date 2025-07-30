@@ -120,7 +120,6 @@ impl YahooConnector {
             self.cookie = Some(self.get_cookie().await?);
         }
 
-        let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
         let url = reqwest::Url::parse(
             &(format!(
                 YQUOTE_SUMMARY_QUERY!(),
@@ -129,12 +128,20 @@ impl YahooConnector {
             )),
         );
 
-        cookie_provider.add_cookie_str(&self.cookie.clone().unwrap(), &url.clone().unwrap());
+        #[cfg(not(target_arch = "wasm32"))]
+        let cookie_provider = {
+            let provider = Arc::new(reqwest::cookie::Jar::default());
+            provider.add_cookie_str(&self.cookie.clone().unwrap(), &url.clone().unwrap());
+            Some(provider)
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let cookie_provider = None;
 
         let max_retries = 1;
         for i in 0..=max_retries {
             let text = self
-                .create_client(Some(cookie_provider.clone()))
+                .create_client(cookie_provider.clone())
                 .await?
                 .get(url.clone().unwrap())
                 .send()
@@ -223,16 +230,22 @@ impl YahooConnector {
         });
 
         // Setup cookie for authenticated request
-        let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
-        let parsed_url = reqwest::Url::parse(&url).map_err(|_| YahooError::InvalidUrl)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let cookie_provider = {
+            let parsed_url = reqwest::Url::parse(&url).map_err(|_| YahooError::InvalidUrl)?;
+            let provider = Arc::new(reqwest::cookie::Jar::default());
+            if let Some(cookie) = &self.cookie {
+                provider.add_cookie_str(cookie, &parsed_url);
+            }
+            Some(provider)
+        };
 
-        if let Some(cookie) = &self.cookie {
-            cookie_provider.add_cookie_str(cookie, &parsed_url);
-        }
+        #[cfg(target_arch = "wasm32")]
+        let cookie_provider = None;
 
         let max_retries = 1;
         for attempt in 0..=max_retries {
-            let client = self.create_client(Some(cookie_provider.clone())).await?;
+            let client = self.create_client(cookie_provider.clone()).await?;
 
             let response = client
                 .post(&url)
@@ -441,11 +454,18 @@ impl YahooConnector {
         let mut last_error = YahooError::NoResponse;
 
         for _attempt in 0..=MAX_RETRIES {
-            let cookie_provider = Arc::new(reqwest::cookie::Jar::default());
-            cookie_provider.add_cookie_str(&self.cookie.clone().unwrap(), &crumb_url);
+            #[cfg(not(target_arch = "wasm32"))]
+            let cookie_provider = {
+                let provider = Arc::new(reqwest::cookie::Jar::default());
+                provider.add_cookie_str(&self.cookie.clone().unwrap(), &crumb_url);
+                Some(provider)
+            };
+
+            #[cfg(target_arch = "wasm32")]
+            let cookie_provider = None;
 
             let response = self
-                .create_client(Some(cookie_provider.clone()))
+                .create_client(cookie_provider.clone())
                 .await?
                 .get(crumb_url.clone())
                 .send()
@@ -499,19 +519,31 @@ impl YahooConnector {
 
     async fn create_client(
         &self,
+        #[cfg(not(target_arch = "wasm32"))]
         cookie_provider: Option<Arc<reqwest::cookie::Jar>>,
+        #[cfg(target_arch = "wasm32")]
+        _cookie_provider: Option<()>,
     ) -> Result<Client, reqwest::Error> {
         let mut client_builder = Client::builder();
 
+        // Cookies are only available on non-WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(cookie_provider) = cookie_provider {
             client_builder = client_builder.cookie_provider(cookie_provider);
         }
+        
+        // Timeout is not available on WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(timeout) = &self.timeout {
             client_builder = client_builder.timeout(*timeout);
         }
+        
         if let Some(user_agent) = &self.user_agent {
             client_builder = client_builder.user_agent(user_agent.clone());
         }
+        
+        // Proxy is not available on WASM targets  
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(proxy) = &self.proxy {
             client_builder = client_builder.proxy(proxy.clone());
         }

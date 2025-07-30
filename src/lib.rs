@@ -10,6 +10,17 @@
 //!
 //! Use the `blocking` feature to get the previous behavior back: i.e. `yahoo_finance_api = {"version": "1.0", features = ["blocking"]}`.
 //!
+//! ## WebAssembly (WASM) Support
+//!
+//! This crate supports WebAssembly targets. To use it in a WASM environment:
+//!
+//! ```toml
+//! [dependencies]
+//! yahoo_finance_api = { version = "4.1", default-features = false }
+//! ```
+//!
+//! Note: The blocking feature is not available on WASM targets.
+//!
 #![cfg_attr(
     not(feature = "blocking"),
     doc = "
@@ -154,15 +165,22 @@ fn main() {
 "
 )]
 
+// Compile-time check to prevent incompatible feature combinations
+#[cfg(all(feature = "blocking", target_arch = "wasm32"))]
+compile_error!("The 'blocking' feature is not supported on WebAssembly targets. Use the async API instead.");
+
 #[cfg(feature = "debug")]
 extern crate serde_json_path_to_error as serde_json;
 
-use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+
 #[cfg(feature = "blocking")]
 use reqwest::blocking::{Client, ClientBuilder};
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest::Proxy;
 #[cfg(not(feature = "blocking"))]
 use reqwest::{Client, ClientBuilder};
@@ -240,6 +258,7 @@ pub struct YahooConnector {
     search_url: &'static str,
     timeout: Option<Duration>,
     user_agent: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
     proxy: Option<Proxy>,
     cookie: Option<String>,
     crumb: Option<String>,
@@ -250,6 +269,7 @@ pub struct YahooConnectorBuilder {
     inner: ClientBuilder,
     timeout: Option<Duration>,
     user_agent: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
     proxy: Option<Proxy>,
 }
 
@@ -277,6 +297,7 @@ impl YahooConnector {
             search_url: YSEARCH_URL,
             timeout: None,
             user_agent: Some(USER_AGENT.to_string()),
+            #[cfg(not(target_arch = "wasm32"))]
             proxy: None,
             cookie: None,
             crumb: None,
@@ -299,26 +320,42 @@ impl YahooConnectorBuilder {
         self
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn proxy(mut self, proxy: Proxy) -> Self {
         self.proxy = Some(proxy);
         self
     }
 
     pub fn build(mut self) -> Result<YahooConnector, YahooError> {
+        // Timeout is not available on WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(timeout) = &self.timeout {
             self.inner = self.inner.timeout(*timeout);
         }
+        
         if let Some(user_agent) = &self.user_agent {
             self.inner = self.inner.user_agent(user_agent.clone());
         }
+        
+        // Proxy is not available on WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(proxy) = &self.proxy {
             self.inner = self.inner.proxy(proxy.clone());
         }
 
+        // Configure TLS for native targets only (WASM uses browser's fetch)
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = self.inner.use_rustls_tls().build()?;
+        
+        // For WASM targets, build without TLS configuration
+        #[cfg(target_arch = "wasm32")]
+        let client = self.inner.build()?;
+
         Ok(YahooConnector {
-            client: self.inner.use_rustls_tls().build()?,
+            client,
             timeout: self.timeout,
             user_agent: self.user_agent,
+            #[cfg(not(target_arch = "wasm32"))]
             proxy: self.proxy,
             ..YahooConnector::default_internal()
         })

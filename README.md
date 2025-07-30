@@ -1,12 +1,85 @@
 # yahoo! finance API
+
 This project provides a set of functions to receive data from the
 the [yahoo! finance](https://finance.yahoo.com) website via their API. This project
 is licensed under Apache 2.0 or MIT license (see files LICENSE-Apache2.0 and LICENSE-MIT).
 
 Since version 0.3 and the upgrade to ```reqwest``` 0.10, all requests to the yahoo API return futures, using ```async``` features.
-Therefore, the functions need to be called from within another ```async``` function with ```.await``` or via functions like ```block_on```. The examples are based on the ```tokio``` runtime applying the ```tokio-test``` crate.
+Therefore, the functions need to be called from within another ```async``` function with ```.await``` or via functions like ```block_on```.
+The examples are based on the ```tokio``` runtime applying the ```tokio-test``` crate.
 
-Use the `blocking` feature to get the previous behavior back: i.e. `yahoo_finance_api = {"version" = "1.0", features = ["blocking"]}`.
+Use the `blocking` feature to get the previous behavior back: i.e. `yahoo_finance_api = {"version": "1.0", features = ["blocking"]}`.
+
+## WebAssembly (WASM) Support
+
+This crate now supports WebAssembly targets! The library automatically adapts its configuration based on the target architecture:
+
+### Usage in WASM
+
+```toml
+[dependencies]
+yahoo_finance_api = "4.1"
+```
+
+### Key Differences for WASM
+
+- **TLS Configuration**: WASM builds use the browser's built-in fetch API instead of native TLS libraries
+- **Cookies**: Cookie handling is automatically disabled on WASM (browser manages cookies)
+- **Timeouts**: Request timeouts are not available on WASM (browser controls this)
+- **Proxies**: Proxy configuration is not available on WASM
+- **Blocking API**: The `blocking` feature is not supported on WASM targets
+
+### Conditional Compilation
+
+The library uses `cfg(target_arch = "wasm32")` to automatically detect WASM targets and adjust functionality accordingly. No special features need to be enabled - it works out of the box!
+
+### Example Usage
+
+```rust
+use yahoo_finance_api as yahoo;
+use time::OffsetDateTime;
+
+// This works on both native and WASM targets
+async fn get_stock_data() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = yahoo::YahooConnector::new()?;
+    
+    // Get latest Apple quotes
+    let response = provider.get_latest_quotes("AAPL", "1d").await?;
+    let quote = response.last_quote()?;
+    let time = OffsetDateTime::from_unix_timestamp(quote.timestamp)?;
+    
+    println!("At {} quote price of Apple was {}", time, quote.close);
+    
+    // Search for tickers
+    let search_result = provider.search_ticker("Apple").await?;
+    println!("Found {} results for 'Apple'", search_result.quotes.len());
+    
+    Ok(())
+}
+```
+
+### Compilation
+
+For native targets:
+```bash
+cargo build
+```
+
+For WASM targets:
+```bash
+cargo build --target wasm32-unknown-unknown
+```
+
+## Features
+
+- **Async API**: All network requests are async by default
+- **Blocking API**: Available on native targets with the `blocking` feature
+- **Cross-platform**: Works on native targets (Linux, macOS, Windows) and WebAssembly
+- **Flexible**: Supports quotes, search, historical data, and more
+
+## License
+
+This project is licensed under Apache 2.0 or MIT license.
 
 # Get the latest available quote:
 ```rust
